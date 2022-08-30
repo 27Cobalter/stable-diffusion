@@ -27,6 +27,14 @@ safety_model_id = "CompVis/stable-diffusion-safety-checker"
 safety_feature_extractor = AutoFeatureExtractor.from_pretrained(safety_model_id)
 safety_checker = StableDiffusionSafetyChecker.from_pretrained(safety_model_id)
 
+# SPDX-License-Identifier: MIT
+# SPDX-FileCopyrightText: © 2022 lox9973
+# https://gitlab.com/-/snippets/2395088
+def patch_conv(klass):
+    init = klass.__init__
+    def __init__(self, *args, **kwargs):
+        return init(self, *args, **kwargs, padding_mode='circular')
+    klass.__init__ = __init__
 
 def chunk(it, size):
     it = iter(it)
@@ -226,14 +234,31 @@ def main():
         choices=["full", "autocast"],
         default="autocast"
     )
-    # メモリ節約 ------------------------------
+    # メモリ節約
     parser.add_argument(
         "--fp16",
         action='store_true',
         help="convert model to fp16"
     )
-    # -----------------------------------------
+    # タイリングテクスチャ
+    parser.add_argument(
+        "--tile",
+        action='store_true',
+        help="create tiling texture"
+    )
+    # プロンプトの加減算
+    # https://zenn.dev/td2sk/articles/eb772103a3a8ff
+    parser.add_argument(
+        "--prompt-correction",
+        action = 'append',
+        help="prompt correction: 'word::0.2' 'word::-0.1' 'word, other word::0.1'",
+    )
+
     opt = parser.parse_args()
+
+    if opt.tile:
+        for klass in [torch.nn.Conv2d, torch.nn.ConvTranspose2d]:
+            patch_conv(klass)
 
     if opt.laion400m:
         print("Falling back to LAION 400M model...")
@@ -245,13 +270,13 @@ def main():
 
     config = OmegaConf.load(f"{opt.config}")
     model = load_model_from_config(config, f"{opt.ckpt}")
-    # メモリ節約 ------------------------------
-    if opt.fp16:
-        model = model.to(torch.float16)
-    # -----------------------------------------
 
     device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
-    model = model.to(device)
+    # メモリ節約
+    if opt.fp16:
+        model = model.half()
+    else:
+        model = model.to(device)
 
     if opt.plms:
         sampler = PLMSSampler(model)
@@ -281,10 +306,11 @@ def main():
 
     sample_path = os.path.join(outpath, "samples")
     os.makedirs(sample_path, exist_ok=True)
-    # 引数保存 ------------------------------
+
+    # 引数保存
     txt_path = os.path.join(outpath, "txt")
     os.makedirs(txt_path, exist_ok=True)
-    # ---------------------------------------
+
     base_count = len(os.listdir(sample_path))
     grid_count = len(os.listdir(outpath)) - 1
 
@@ -306,6 +332,18 @@ def main():
                         if isinstance(prompts, tuple):
                             prompts = list(prompts)
                         c = model.get_learned_conditioning(prompts)
+
+                        # プロンプトの加減算
+                        correction_weight = 1;
+                        if opt.prompt_correction:
+                            for pw in opt.prompt_correction:
+                                for pw in opt.prompt_correction:
+                                    pw = pw.split('::')
+                                    p, weight = pw[:-1], float(pw[-1])
+                                    correction_weight += weight
+                                    c += weight * model.get_learned_conditioning(list(p))
+                        c = c / correction_weight
+
                         shape = [opt.C, opt.H // opt.f, opt.W // opt.f]
                         samples_ddim, _ = sampler.sample(S=opt.ddim_steps,
                                                          conditioning=c,
@@ -347,10 +385,10 @@ def main():
                     img = Image.fromarray(grid.astype(np.uint8))
                     img = put_watermark(img, wm_encoder)
                     img.save(os.path.join(outpath, f'grid-{grid_count:04}.png'))
-                    # 引数保存 ------------------------------
+                    # 引数保存
                     with open(os.path.join(txt_path, f'grid-{grid_count:04}.txt'), mode='w') as f:
                         f.write(str(opt)+'\n')
-                    # ---------------------------------------
+
                     grid_count += 1
 
                 toc = time.time()
