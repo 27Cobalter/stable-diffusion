@@ -226,6 +226,13 @@ def main():
         choices=["full", "autocast"],
         default="autocast"
     )
+    # メモリ節約 ------------------------------
+    parser.add_argument(
+        "--fp16",
+        action='store_true',
+        help="convert model to fp16"
+    )
+    # -----------------------------------------
     opt = parser.parse_args()
 
     if opt.laion400m:
@@ -238,6 +245,10 @@ def main():
 
     config = OmegaConf.load(f"{opt.config}")
     model = load_model_from_config(config, f"{opt.ckpt}")
+    # メモリ節約 ------------------------------
+    if opt.fp16:
+        model = model.to(torch.float16)
+    # -----------------------------------------
 
     device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
     model = model.to(device)
@@ -270,6 +281,10 @@ def main():
 
     sample_path = os.path.join(outpath, "samples")
     os.makedirs(sample_path, exist_ok=True)
+    # 引数保存 ------------------------------
+    txt_path = os.path.join(outpath, "txt")
+    os.makedirs(txt_path, exist_ok=True)
+    # ---------------------------------------
     base_count = len(os.listdir(sample_path))
     grid_count = len(os.listdir(outpath)) - 1
 
@@ -332,6 +347,10 @@ def main():
                     img = Image.fromarray(grid.astype(np.uint8))
                     img = put_watermark(img, wm_encoder)
                     img.save(os.path.join(outpath, f'grid-{grid_count:04}.png'))
+                    # 引数保存 ------------------------------
+                    with open(os.path.join(txt_path, f'grid-{grid_count:04}.txt'), mode='w') as f:
+                        f.write(str(opt)+'\n')
+                    # ---------------------------------------
                     grid_count += 1
 
                 toc = time.time()
