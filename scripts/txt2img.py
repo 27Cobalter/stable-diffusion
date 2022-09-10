@@ -390,9 +390,14 @@ def main():
                         img.save(grid_name)
                         # 引数保存
                         with ExifTool() as et:
-                            print(et.execute(*["-XMP-dc:description="+"seed="+str(seed)+", param="+str(opt)] + ["-overwrite_original"]+ [grid_name]))
+                            print(et.execute(*["-XMP-dc:description="+"seed="+str(seed)+", param="+str(opt)]
+                                + ["-XMP-dc:title="+str(seed)]
+                                + ["-XMP-dc:subject="+str(prompt)]
+                                + ["-overwrite_original"]
+                                + [grid_name]))
                         with open(os.path.join(txt_path, f'grid-{grid_count:04}.txt'), mode='w') as f:
                             f.write(str(opt)+'\n')
+                        print("imave save -> ", str(grid_name))
 
                         grid_count += 1
 
