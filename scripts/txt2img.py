@@ -314,7 +314,7 @@ def main():
         random.seed()
 
     for i in range(seed_iter):
-        if seed_iter != 1:
+        if opt.rep_seed or seed_iter > 1:
             if opt.rep_seed:
                 seed = opt.rep_seed[i]
             else:
