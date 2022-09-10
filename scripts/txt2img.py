@@ -22,6 +22,7 @@ from ldm.models.diffusion.plms import PLMSSampler
 # pyexiftoolをインストールする
 # https://pypi.org/project/PyExifTool/
 from exiftool import ExifTool
+import random
 
 # SPDX-License-Identifier: MIT
 # SPDX-FileCopyrightText: © 2022 lox9973
@@ -231,6 +232,19 @@ def main():
         action = 'append',
         help="prompt correction: 'word::0.2' 'word::-0.1' 'word, other word::0.1'",
     )
+    # random seedでイテレーション
+    parser.add_argument(
+        "--n_seed_iter",
+        type=int,
+        default=1,
+        help="try of times with a random seed",
+    )
+    # seedをまとめて再現
+    parser.add_argument(
+        "--rep_seed",
+        action = 'append',
+        help="reproduce the seeds",
+    )
 
     opt = parser.parse_args()
 
@@ -292,80 +306,97 @@ def main():
         start_code = torch.randn([opt.n_samples, opt.C, opt.H // opt.f, opt.W // opt.f], device=device)
 
     precision_scope = autocast if opt.precision=="autocast" else nullcontext
-    with torch.no_grad():
-        with precision_scope("cuda"):
-            with model.ema_scope():
-                tic = time.time()
-                all_samples = list()
-                for n in trange(opt.n_iter, desc="Sampling"):
-                    for prompts in tqdm(data, desc="data"):
-                        uc = None
-                        if opt.scale != 1.0:
-                            uc = model.get_learned_conditioning(batch_size * [""])
-                        if isinstance(prompts, tuple):
-                            prompts = list(prompts)
-                        c = model.get_learned_conditioning(prompts)
 
-                        # プロンプトの加減算
-                        correction_weight = 1;
-                        if opt.prompt_correction:
-                            for pw in opt.prompt_correction:
+    if opt.rep_seed:
+        seed_iter = len(opt.rep_seed)
+    else:
+        seed_iter = opt.n_seed_iter
+        random.seed()
+
+    for i in range(seed_iter):
+        if seed_iter != 1:
+            if opt.rep_seed:
+                seed = opt.rep_seed[i]
+            else:
+                seed = random.randint(0, 0x7FFFFFFF)
+            seed_everything(seed)
+        else:
+            seed = opt.seed
+
+        with torch.no_grad():
+            with precision_scope("cuda"):
+                with model.ema_scope():
+                    tic = time.time()
+                    all_samples = list()
+                    for n in trange(opt.n_iter, desc="Sampling"):
+                        for prompts in tqdm(data, desc="data"):
+                            uc = None
+                            if opt.scale != 1.0:
+                                uc = model.get_learned_conditioning(batch_size * [""])
+                            if isinstance(prompts, tuple):
+                                prompts = list(prompts)
+                            c = model.get_learned_conditioning(prompts)
+
+                            # プロンプトの加減算
+                            correction_weight = 1;
+                            if opt.prompt_correction:
                                 for pw in opt.prompt_correction:
-                                    pw = pw.split('::')
-                                    p, weight = pw[:-1], float(pw[-1])
-                                    correction_weight += weight
-                                    c += weight * model.get_learned_conditioning(list(p))
-                        c = c / correction_weight
+                                    for pw in opt.prompt_correction:
+                                        pw = pw.split('::')
+                                        p, weight = pw[:-1], float(pw[-1])
+                                        correction_weight += weight
+                                        c += weight * model.get_learned_conditioning(list(p))
+                            c = c / correction_weight
 
-                        shape = [opt.C, opt.H // opt.f, opt.W // opt.f]
-                        samples_ddim, _ = sampler.sample(S=opt.ddim_steps,
-                                                         conditioning=c,
-                                                         batch_size=opt.n_samples,
-                                                         shape=shape,
-                                                         verbose=False,
-                                                         unconditional_guidance_scale=opt.scale,
-                                                         unconditional_conditioning=uc,
-                                                         eta=opt.ddim_eta,
-                                                         x_T=start_code)
+                            shape = [opt.C, opt.H // opt.f, opt.W // opt.f]
+                            samples_ddim, _ = sampler.sample(S=opt.ddim_steps,
+                                                             conditioning=c,
+                                                             batch_size=opt.n_samples,
+                                                             shape=shape,
+                                                             verbose=False,
+                                                             unconditional_guidance_scale=opt.scale,
+                                                             unconditional_conditioning=uc,
+                                                             eta=opt.ddim_eta,
+                                                             x_T=start_code)
 
-                        x_samples_ddim = model.decode_first_stage(samples_ddim)
-                        x_samples_ddim = torch.clamp((x_samples_ddim + 1.0) / 2.0, min=0.0, max=1.0)
-                        x_samples_ddim = x_samples_ddim.cpu().permute(0, 2, 3, 1).numpy()
+                            x_samples_ddim = model.decode_first_stage(samples_ddim)
+                            x_samples_ddim = torch.clamp((x_samples_ddim + 1.0) / 2.0, min=0.0, max=1.0)
+                            x_samples_ddim = x_samples_ddim.cpu().permute(0, 2, 3, 1).numpy()
 
-                        x_checked_image = x_samples_ddim
+                            x_checked_image = x_samples_ddim
 
-                        x_checked_image_torch = torch.from_numpy(x_checked_image).permute(0, 3, 1, 2)
+                            x_checked_image_torch = torch.from_numpy(x_checked_image).permute(0, 3, 1, 2)
 
-                        if not opt.skip_save:
-                            for x_sample in x_checked_image_torch:
-                                x_sample = 255. * rearrange(x_sample.cpu().numpy(), 'c h w -> h w c')
-                                img = Image.fromarray(x_sample.astype(np.uint8))
-                                img.save(os.path.join(sample_path, f"{base_count:05}.png"))
-                                base_count += 1
+                            if not opt.skip_save:
+                                for x_sample in x_checked_image_torch:
+                                    x_sample = 255. * rearrange(x_sample.cpu().numpy(), 'c h w -> h w c')
+                                    img = Image.fromarray(x_sample.astype(np.uint8))
+                                    img.save(os.path.join(sample_path, f"{base_count:05}.png"))
+                                    base_count += 1
 
-                        if not opt.skip_grid:
-                            all_samples.append(x_checked_image_torch)
+                            if not opt.skip_grid:
+                                all_samples.append(x_checked_image_torch)
 
-                if not opt.skip_grid:
-                    # additionally, save as grid
-                    grid = torch.stack(all_samples, 0)
-                    grid = rearrange(grid, 'n b c h w -> (n b) c h w')
-                    grid = make_grid(grid, nrow=n_rows)
+                    if not opt.skip_grid:
+                        # additionally, save as grid
+                        grid = torch.stack(all_samples, 0)
+                        grid = rearrange(grid, 'n b c h w -> (n b) c h w')
+                        grid = make_grid(grid, nrow=n_rows)
 
-                    # to image
-                    grid = 255. * rearrange(grid, 'c h w -> h w c').cpu().numpy()
-                    img = Image.fromarray(grid.astype(np.uint8))
-                    grid_name = os.path.join(outpath, f'grid-{grid_count:05}.png')
-                    img.save(grid_name)
-                    # 引数保存
-                    with ExifTool() as et:
-                        print(et.execute(*["-XMP-dc:description="+str(opt)] + ["-overwrite_original"]+ [grid_name]))
-                    with open(os.path.join(txt_path, f'grid-{grid_count:04}.txt'), mode='w') as f:
-                        f.write(str(opt)+'\n')
+                        # to image
+                        grid = 255. * rearrange(grid, 'c h w -> h w c').cpu().numpy()
+                        img = Image.fromarray(grid.astype(np.uint8))
+                        grid_name = os.path.join(outpath, f'grid-{grid_count:05}.png')
+                        img.save(grid_name)
+                        # 引数保存
+                        with ExifTool() as et:
+                            print(et.execute(*["-XMP-dc:description="+"seed="+str(seed)+", param="+str(opt)] + ["-overwrite_original"]+ [grid_name]))
+                        with open(os.path.join(txt_path, f'grid-{grid_count:04}.txt'), mode='w') as f:
+                            f.write(str(opt)+'\n')
 
-                    grid_count += 1
+                        grid_count += 1
 
-                toc = time.time()
+                    toc = time.time()
 
     print(f"Your samples are ready and waiting for you here: \n{outpath} \n"
           f" \nEnjoy.")
