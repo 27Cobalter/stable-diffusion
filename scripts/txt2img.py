@@ -232,13 +232,6 @@ def main():
         action = 'append',
         help="prompt correction: 'word::0.2' 'word::-0.1' 'word, other word::0.1'",
     )
-    # random seedでイテレーション
-    parser.add_argument(
-        "--n_seed_iter",
-        type=int,
-        default=1,
-        help="try of times with a random seed",
-    )
     # seedをまとめて再現
     parser.add_argument(
         "--rep_seed",
@@ -259,6 +252,7 @@ def main():
         opt.outdir = "outputs/txt2img-samples-laion400m"
 
     seed_everything(opt.seed)
+    seed = opt.seed
 
     config = OmegaConf.load(f"{opt.config}")
     model = load_model_from_config(config, f"{opt.ckpt}")
@@ -299,6 +293,7 @@ def main():
     os.makedirs(txt_path, exist_ok=True)
 
     base_count = len(os.listdir(sample_path))
+    base_begin = base_count
     grid_count = len(os.listdir(outpath)) - 1
 
     start_code = None
@@ -307,101 +302,113 @@ def main():
 
     precision_scope = autocast if opt.precision=="autocast" else nullcontext
 
-    if opt.rep_seed:
-        seed_iter = len(opt.rep_seed)
-    else:
-        seed_iter = opt.n_seed_iter
-        random.seed()
+    random.seed()
 
-    for i in range(seed_iter):
-        if opt.rep_seed or seed_iter > 1:
-            if opt.rep_seed:
-                seed = opt.rep_seed[i]
-            else:
-                seed = random.randint(0, 0x7FFFFFFF)
-            seed_everything(seed)
-        else:
-            seed = opt.seed
+    with torch.no_grad():
+        with precision_scope("cuda"):
+            with model.ema_scope():
+                tic = time.time()
+                all_samples = list()
 
-        with torch.no_grad():
-            with precision_scope("cuda"):
-                with model.ema_scope():
-                    tic = time.time()
-                    all_samples = list()
-                    for n in trange(opt.n_iter, desc="Sampling"):
-                        for prompts in tqdm(data, desc="data"):
-                            uc = None
-                            if opt.scale != 1.0:
-                                uc = model.get_learned_conditioning(batch_size * [""])
-                            if isinstance(prompts, tuple):
-                                prompts = list(prompts)
-                            c = model.get_learned_conditioning(prompts)
+                n_iter = opt.n_iter
+                if opt.rep_seed:
+                    n_iter = len(opt.rep_seed)
+                i = 0
+                for n in trange(n_iter, desc="Sampling"):
+                    if opt.rep_seed or n_iter > 1:
+                        if opt.rep_seed:
+                            seed = opt.rep_seed[i]
+                            i += 1
+                        else:
+                            seed = random.randint(0, 0x7FFFFFFF)
+                        seed_everything(seed)
 
-                            # プロンプトの加減算
-                            correction_weight = 1;
-                            if opt.prompt_correction:
+                    for prompts in tqdm(data, desc="data"):
+                        uc = None
+                        if opt.scale != 1.0:
+                            uc = model.get_learned_conditioning(batch_size * [""])
+                        if isinstance(prompts, tuple):
+                            prompts = list(prompts)
+                        c = model.get_learned_conditioning(prompts)
+
+                        # プロンプトの加減算
+                        correction_weight = 1;
+                        if opt.prompt_correction:
+                            for pw in opt.prompt_correction:
                                 for pw in opt.prompt_correction:
-                                    for pw in opt.prompt_correction:
-                                        pw = pw.split('::')
-                                        p, weight = pw[:-1], float(pw[-1])
-                                        correction_weight += weight
-                                        c += weight * model.get_learned_conditioning(list(p))
-                            c = c / correction_weight
+                                    pw = pw.split('::')
+                                    p, weight = pw[:-1], float(pw[-1])
+                                    correction_weight += weight
+                                    c += weight * model.get_learned_conditioning(list(p))
+                        c = c / correction_weight
 
-                            shape = [opt.C, opt.H // opt.f, opt.W // opt.f]
-                            samples_ddim, _ = sampler.sample(S=opt.ddim_steps,
-                                                             conditioning=c,
-                                                             batch_size=opt.n_samples,
-                                                             shape=shape,
-                                                             verbose=False,
-                                                             unconditional_guidance_scale=opt.scale,
-                                                             unconditional_conditioning=uc,
-                                                             eta=opt.ddim_eta,
-                                                             x_T=start_code)
+                        shape = [opt.C, opt.H // opt.f, opt.W // opt.f]
+                        samples_ddim, _ = sampler.sample(S=opt.ddim_steps,
+                                                         conditioning=c,
+                                                         batch_size=opt.n_samples,
+                                                         shape=shape,
+                                                         verbose=False,
+                                                         unconditional_guidance_scale=opt.scale,
+                                                         unconditional_conditioning=uc,
+                                                         eta=opt.ddim_eta,
+                                                         x_T=start_code)
 
-                            x_samples_ddim = model.decode_first_stage(samples_ddim)
-                            x_samples_ddim = torch.clamp((x_samples_ddim + 1.0) / 2.0, min=0.0, max=1.0)
-                            x_samples_ddim = x_samples_ddim.cpu().permute(0, 2, 3, 1).numpy()
+                        x_samples_ddim = model.decode_first_stage(samples_ddim)
+                        x_samples_ddim = torch.clamp((x_samples_ddim + 1.0) / 2.0, min=0.0, max=1.0)
+                        x_samples_ddim = x_samples_ddim.cpu().permute(0, 2, 3, 1).numpy()
 
-                            x_checked_image = x_samples_ddim
+                        x_checked_image = x_samples_ddim
 
-                            x_checked_image_torch = torch.from_numpy(x_checked_image).permute(0, 3, 1, 2)
+                        x_checked_image_torch = torch.from_numpy(x_checked_image).permute(0, 3, 1, 2)
 
-                            if not opt.skip_save:
-                                for x_sample in x_checked_image_torch:
-                                    x_sample = 255. * rearrange(x_sample.cpu().numpy(), 'c h w -> h w c')
-                                    img = Image.fromarray(x_sample.astype(np.uint8))
-                                    img.save(os.path.join(sample_path, f"{base_count:05}.png"))
-                                    base_count += 1
+                        if not opt.skip_save:
+                            for x_sample in x_checked_image_torch:
+                                x_sample = 255. * rearrange(x_sample.cpu().numpy(), 'c h w -> h w c')
+                                img = Image.fromarray(x_sample.astype(np.uint8))
+                                sample_base_count = os.path.join(sample_path, f"{base_count:05}.png")
+                                img.save(sample_base_count)
+                                base_count += 1
+                                # 引数保存
+                                with ExifTool() as et:
+                                    print(et.execute(
+                                         *["-XMP-dc:description="+"seed="+str(seed)+", param="+str(opt)]
+                                        + ["-XMP-dc:title="+str(seed)]
+                                        + ["-XMP-dc:subject="+str(prompt)]
+                                        + ["-overwrite_original"]
+                                        + [sample_base_count]))
+                                print("imave save -> ", str(sample_base_count))
 
-                            if not opt.skip_grid:
-                                all_samples.append(x_checked_image_torch)
+                        if not opt.skip_grid:
+                            all_samples.append(x_checked_image_torch)
 
-                    if not opt.skip_grid:
-                        # additionally, save as grid
-                        grid = torch.stack(all_samples, 0)
-                        grid = rearrange(grid, 'n b c h w -> (n b) c h w')
-                        grid = make_grid(grid, nrow=n_rows)
+                if not opt.skip_grid:
+                    # additionally, save as grid
+                    grid = torch.stack(all_samples, 0)
+                    grid = rearrange(grid, 'n b c h w -> (n b) c h w')
+                    grid = make_grid(grid, nrow=n_rows)
 
-                        # to image
-                        grid = 255. * rearrange(grid, 'c h w -> h w c').cpu().numpy()
-                        img = Image.fromarray(grid.astype(np.uint8))
-                        grid_name = os.path.join(outpath, f'grid-{grid_count:05}.png')
-                        img.save(grid_name)
-                        # 引数保存
-                        with ExifTool() as et:
-                            print(et.execute(*["-XMP-dc:description="+"seed="+str(seed)+", param="+str(opt)]
-                                + ["-XMP-dc:title="+str(seed)]
-                                + ["-XMP-dc:subject="+str(prompt)]
-                                + ["-overwrite_original"]
-                                + [grid_name]))
-                        with open(os.path.join(txt_path, f'grid-{grid_count:04}.txt'), mode='w') as f:
-                            f.write(str(opt)+'\n')
-                        print("imave save -> ", str(grid_name))
+                    # to image
+                    grid = 255. * rearrange(grid, 'c h w -> h w c').cpu().numpy()
+                    img = Image.fromarray(grid.astype(np.uint8))
+                    grid_name = os.path.join(outpath, f'grid-{grid_count:05}.png')
+                    img.save(grid_name)
+                    # 引数保存
+                    base_range = f"{base_begin:05}.png:{base_count-1:05}.png"
+                    with ExifTool() as et:
+                        print(et.execute(
+                            *["-XMP-dc:description="+base_range+", seed="+str(seed)+", param="+str(opt)]
+                            + ["-XMP-dc:title="+str(seed)]
+                            + ["-XMP-dc:subject="+str(prompt)]
+                            + ["-overwrite_original"]
+                            + [grid_name]))
+                    with open(os.path.join(txt_path, f'grid-{grid_count:04}.txt'), mode='w') as f:
+                        f.write(str(opt)+'\n')
+                    print("imave save -> ", str(grid_name))
+                    print("  base_range :", base_range)
 
-                        grid_count += 1
+                    grid_count += 1
 
-                    toc = time.time()
+                toc = time.time()
 
     print(f"Your samples are ready and waiting for you here: \n{outpath} \n"
           f" \nEnjoy.")
