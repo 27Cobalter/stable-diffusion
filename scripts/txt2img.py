@@ -350,7 +350,6 @@ def main():
                     # to image
                     grid = 255. * rearrange(grid, 'c h w -> h w c').cpu().numpy()
                     img = Image.fromarray(grid.astype(np.uint8))
-                    img = put_watermark(img, wm_encoder)
                     img.save(os.path.join(outpath, f'grid-{grid_count:04}.png'))
                     # 引数保存
                     with open(os.path.join(txt_path, f'grid-{grid_count:04}.txt'), mode='w') as f:
