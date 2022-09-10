@@ -17,6 +17,11 @@ from ldm.util import instantiate_from_config
 from ldm.models.diffusion.ddim import DDIMSampler
 from ldm.models.diffusion.plms import PLMSSampler
 
+# exiftool.exeにパスを通すまたは同ディレクトリに配置
+# https://exiftool.org
+# pyexiftoolをインストールする
+# https://pypi.org/project/PyExifTool/
+from exiftool import ExifTool
 
 # SPDX-License-Identifier: MIT
 # SPDX-FileCopyrightText: © 2022 lox9973
@@ -350,8 +355,11 @@ def main():
                     # to image
                     grid = 255. * rearrange(grid, 'c h w -> h w c').cpu().numpy()
                     img = Image.fromarray(grid.astype(np.uint8))
-                    img.save(os.path.join(outpath, f'grid-{grid_count:04}.png'))
+                    grid_name = os.path.join(outpath, f'grid-{grid_count:05}.png')
+                    img.save(grid_name)
                     # 引数保存
+                    with ExifTool() as et:
+                        print(et.execute(*["-XMP-dc:description="+str(opt)] + ["-overwrite_original"]+ [grid_name]))
                     with open(os.path.join(txt_path, f'grid-{grid_count:04}.txt'), mode='w') as f:
                         f.write(str(opt)+'\n')
 
