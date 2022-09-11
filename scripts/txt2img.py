@@ -321,6 +321,7 @@ def main():
                             i += 1
                         else:
                             seed = random.randint(0, 0x7FFFFFFF)
+                        print("\n")
                         seed_everything(seed)
 
                     for prompts in tqdm(data, desc="data"):
