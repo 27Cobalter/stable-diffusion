@@ -23,6 +23,7 @@ from ldm.models.diffusion.plms import PLMSSampler
 # https://pypi.org/project/PyExifTool/
 from exiftool import ExifTool
 import random
+import csv
 
 # SPDX-License-Identifier: MIT
 # SPDX-FileCopyrightText: © 2022 lox9973
@@ -34,6 +35,21 @@ def patch_conv(klass):
         return init(self, *args, **kwargs, padding_mode="circular")
 
     klass.__init__ = __init__
+
+
+# waifu-diffusionは他モデルとプロンプトの順番が違うらしい
+# https://wiki.installgentoo.com/wiki/Stable_Diffusion#Waifu_Diffusion
+def load_prompt_csv(path):
+    with open(path, encoding="utf_8") as f:
+        reader = csv.reader(f)
+        raw_list = [row for row in reader]
+        mat = np.array(raw_list[1:]).transpose().tolist()
+        prompts = []
+        for vec in mat:
+            prompts.append(" ".join(sorted([i for i in vec if i != ""])))
+        prompts = " ".join(prompts)
+    return prompts
+
 
 def chunk(it, size):
     it = iter(it)
@@ -232,6 +248,13 @@ def main():
         action="append",
         help="reproduce the seeds",
     )
+    # promptをcsvファイルから読み込む
+    parser.add_argument(
+        "--prompt_csv",
+        type=str,
+        default="./prompt.csv",
+        help="load prompts from this csv. this feature is for waifu-diffusion",
+    )
 
     opt = parser.parse_args()
 
@@ -269,10 +292,16 @@ def main():
     batch_size = opt.n_samples
     n_rows = opt.n_rows if opt.n_rows > 0 else batch_size
     if not opt.from_file:
-        prompt = opt.prompt
-        assert prompt is not None
-        data = [batch_size * [prompt]]
-
+        if not opt.prompt_csv:
+            prompt = opt.prompt
+            assert prompt is not None
+            data = [batch_size * [prompt]]
+        else:
+            print(f"reading prompts from {opt.from_file}")
+            prompt = load_prompt_csv(opt.prompt_csv)
+            print(prompt)
+            assert prompt is not None
+            data = [batch_size * [prompt]]
     else:
         print(f"reading prompts from {opt.from_file}")
         with open(opt.from_file, "r") as f:
