@@ -29,8 +29,10 @@ import random
 # https://gitlab.com/-/snippets/2395088
 def patch_conv(klass):
     init = klass.__init__
+
     def __init__(self, *args, **kwargs):
-        return init(self, *args, **kwargs, padding_mode='circular')
+        return init(self, *args, **kwargs, padding_mode="circular")
+
     klass.__init__ = __init__
 
 def chunk(it, size):
@@ -74,7 +76,7 @@ def load_replacement(x):
     try:
         hwc = x.shape
         y = Image.open("assets/rick.jpeg").convert("RGB").resize((hwc[1], hwc[0]))
-        y = (np.array(y)/255.0).astype(x.dtype)
+        y = (np.array(y) / 255.0).astype(x.dtype)
         assert y.shape == x.shape
         return y
     except Exception:
@@ -89,23 +91,23 @@ def main():
         type=str,
         nargs="?",
         default="a painting of a virus monster playing guitar",
-        help="the prompt to render"
+        help="the prompt to render",
     )
     parser.add_argument(
         "--outdir",
         type=str,
         nargs="?",
         help="dir to write results to",
-        default="outputs/txt2img-samples"
+        default="outputs/txt2img-samples",
     )
     parser.add_argument(
         "--skip_grid",
-        action='store_true',
+        action="store_true",
         help="do not save a grid, only individual samples. Helpful when evaluating lots of samples",
     )
     parser.add_argument(
         "--skip_save",
-        action='store_true',
+        action="store_true",
         help="do not save individual samples. For speed measurements.",
     )
     parser.add_argument(
@@ -116,17 +118,17 @@ def main():
     )
     parser.add_argument(
         "--plms",
-        action='store_true',
+        action="store_true",
         help="use plms sampling",
     )
     parser.add_argument(
         "--laion400m",
-        action='store_true',
+        action="store_true",
         help="uses the LAION400M model",
     )
     parser.add_argument(
         "--fixed_code",
-        action='store_true',
+        action="store_true",
         help="if enabled, uses the same starting code across samples ",
     )
     parser.add_argument(
@@ -211,31 +213,23 @@ def main():
         type=str,
         help="evaluate at this precision",
         choices=["full", "autocast"],
-        default="autocast"
+        default="autocast",
     )
     # メモリ節約
-    parser.add_argument(
-        "--fp16",
-        action='store_true',
-        help="convert model to fp16"
-    )
+    parser.add_argument("--fp16", action="store_true", help="convert model to fp16")
     # タイリングテクスチャ
-    parser.add_argument(
-        "--tile",
-        action='store_true',
-        help="create tiling texture"
-    )
+    parser.add_argument("--tile", action="store_true", help="create tiling texture")
     # プロンプトの加減算
     # https://zenn.dev/td2sk/articles/eb772103a3a8ff
     parser.add_argument(
         "--prompt-correction",
-        action = 'append',
+        action="append",
         help="prompt correction: 'word::0.2' 'word::-0.1' 'word, other word::0.1'",
     )
     # seedをまとめて再現
     parser.add_argument(
         "--rep_seed",
-        action = 'append',
+        action="append",
         help="reproduce the seeds",
     )
 
@@ -298,9 +292,11 @@ def main():
 
     start_code = None
     if opt.fixed_code:
-        start_code = torch.randn([opt.n_samples, opt.C, opt.H // opt.f, opt.W // opt.f], device=device)
+        start_code = torch.randn(
+            [opt.n_samples, opt.C, opt.H // opt.f, opt.W // opt.f], device=device
+        )
 
-    precision_scope = autocast if opt.precision=="autocast" else nullcontext
+    precision_scope = autocast if opt.precision == "autocast" else nullcontext
 
     random.seed()
 
@@ -333,50 +329,73 @@ def main():
                         c = model.get_learned_conditioning(prompts)
 
                         # プロンプトの加減算
-                        correction_weight = 1;
+                        correction_weight = 1
                         if opt.prompt_correction:
                             for pw in opt.prompt_correction:
                                 for pw in opt.prompt_correction:
-                                    pw = pw.split('::')
+                                    pw = pw.split("::")
                                     p, weight = pw[:-1], float(pw[-1])
                                     correction_weight += weight
-                                    c += weight * model.get_learned_conditioning(list(p))
+                                    c += weight * model.get_learned_conditioning(
+                                        list(p)
+                                    )
                         c = c / correction_weight
 
                         shape = [opt.C, opt.H // opt.f, opt.W // opt.f]
-                        samples_ddim, _ = sampler.sample(S=opt.ddim_steps,
-                                                         conditioning=c,
-                                                         batch_size=opt.n_samples,
-                                                         shape=shape,
-                                                         verbose=False,
-                                                         unconditional_guidance_scale=opt.scale,
-                                                         unconditional_conditioning=uc,
-                                                         eta=opt.ddim_eta,
-                                                         x_T=start_code)
+                        samples_ddim, _ = sampler.sample(
+                            S=opt.ddim_steps,
+                            conditioning=c,
+                            batch_size=opt.n_samples,
+                            shape=shape,
+                            verbose=False,
+                            unconditional_guidance_scale=opt.scale,
+                            unconditional_conditioning=uc,
+                            eta=opt.ddim_eta,
+                            x_T=start_code,
+                        )
 
                         x_samples_ddim = model.decode_first_stage(samples_ddim)
-                        x_samples_ddim = torch.clamp((x_samples_ddim + 1.0) / 2.0, min=0.0, max=1.0)
-                        x_samples_ddim = x_samples_ddim.cpu().permute(0, 2, 3, 1).numpy()
+                        x_samples_ddim = torch.clamp(
+                            (x_samples_ddim + 1.0) / 2.0, min=0.0, max=1.0
+                        )
+                        x_samples_ddim = (
+                            x_samples_ddim.cpu().permute(0, 2, 3, 1).numpy()
+                        )
 
                         x_checked_image = x_samples_ddim
 
-                        x_checked_image_torch = torch.from_numpy(x_checked_image).permute(0, 3, 1, 2)
+                        x_checked_image_torch = torch.from_numpy(
+                            x_checked_image
+                        ).permute(0, 3, 1, 2)
 
                         if not opt.skip_save:
                             for x_sample in x_checked_image_torch:
-                                x_sample = 255. * rearrange(x_sample.cpu().numpy(), 'c h w -> h w c')
+                                x_sample = 255.0 * rearrange(
+                                    x_sample.cpu().numpy(), "c h w -> h w c"
+                                )
                                 img = Image.fromarray(x_sample.astype(np.uint8))
-                                sample_base_count = os.path.join(sample_path, f"{base_count:05}.png")
+                                sample_base_count = os.path.join(
+                                    sample_path, f"{base_count:05}.png"
+                                )
                                 img.save(sample_base_count)
                                 base_count += 1
                                 # 引数保存
                                 with ExifTool() as et:
-                                    print(et.execute(
-                                         *["-XMP-dc:description="+"seed="+str(seed)+", param="+str(opt)]
-                                        + ["-XMP-dc:title="+str(seed)]
-                                        + ["-XMP-dc:subject="+str(prompt)]
-                                        + ["-overwrite_original"]
-                                        + [sample_base_count]))
+                                    print(
+                                        et.execute(
+                                            *[
+                                                "-XMP-dc:description="
+                                                + "seed="
+                                                + str(seed)
+                                                + ", param="
+                                                + str(opt)
+                                            ]
+                                            + ["-XMP-dc:title=" + str(seed)]
+                                            + ["-XMP-dc:subject=" + str(prompt)]
+                                            + ["-overwrite_original"]
+                                            + [sample_base_count]
+                                        )
+                                    )
                                 print("imave save -> ", str(sample_base_count))
 
                         if not opt.skip_grid:
@@ -385,25 +404,37 @@ def main():
                 if not opt.skip_grid:
                     # additionally, save as grid
                     grid = torch.stack(all_samples, 0)
-                    grid = rearrange(grid, 'n b c h w -> (n b) c h w')
+                    grid = rearrange(grid, "n b c h w -> (n b) c h w")
                     grid = make_grid(grid, nrow=n_rows)
 
                     # to image
-                    grid = 255. * rearrange(grid, 'c h w -> h w c').cpu().numpy()
+                    grid = 255.0 * rearrange(grid, "c h w -> h w c").cpu().numpy()
                     img = Image.fromarray(grid.astype(np.uint8))
-                    grid_name = os.path.join(outpath, f'grid-{grid_count:05}.png')
+                    grid_name = os.path.join(outpath, f"grid-{grid_count:05}.png")
                     img.save(grid_name)
                     # 引数保存
                     base_range = f"{base_begin:05}.png:{base_count-1:05}.png"
                     with ExifTool() as et:
-                        print(et.execute(
-                            *["-XMP-dc:description="+base_range+", seed="+str(seed)+", param="+str(opt)]
-                            + ["-XMP-dc:title="+str(seed)]
-                            + ["-XMP-dc:subject="+str(prompt)]
-                            + ["-overwrite_original"]
-                            + [grid_name]))
-                    with open(os.path.join(txt_path, f'grid-{grid_count:04}.txt'), mode='w') as f:
-                        f.write(str(opt)+'\n')
+                        print(
+                            et.execute(
+                                *[
+                                    "-XMP-dc:description="
+                                    + base_range
+                                    + ", seed="
+                                    + str(seed)
+                                    + ", param="
+                                    + str(opt)
+                                ]
+                                + ["-XMP-dc:title=" + str(seed)]
+                                + ["-XMP-dc:subject=" + str(prompt)]
+                                + ["-overwrite_original"]
+                                + [grid_name]
+                            )
+                        )
+                    with open(
+                        os.path.join(txt_path, f"grid-{grid_count:04}.txt"), mode="w"
+                    ) as f:
+                        f.write(str(opt) + "\n")
                     print("imave save -> ", str(grid_name))
                     print("  base_range :", base_range)
 
@@ -411,8 +442,9 @@ def main():
 
                 toc = time.time()
 
-    print(f"Your samples are ready and waiting for you here: \n{outpath} \n"
-          f" \nEnjoy.")
+    print(
+        f"Your samples are ready and waiting for you here: \n{outpath} \n" f" \nEnjoy."
+    )
 
 
 if __name__ == "__main__":
