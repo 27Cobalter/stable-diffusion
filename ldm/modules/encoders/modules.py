@@ -164,11 +164,12 @@ class FrozenCLIPEmbedder(AbstractEncoder):
         tokens = batch_encoding["input_ids"].to(self.device)
         outputs = self.transformer(input_ids=tokens)
 
-        print(f"\ninput_ids_size="+str(batch_encoding.input_ids.size()[-1]));
+        if(batch_encoding.input_ids.tolist()[0][1] != batch_encoding.input_ids.tolist()[0][2]):
+            print(f"\ninput_ids_size="+str(batch_encoding.input_ids.size()[-1]));
+            print(self.decode_token_matrix(batch_encoding.input_ids.tolist()))
         if hasattr(batch_encoding, "overflowing_tokens"):
             if batch_encoding.overflowing_tokens.size()[-1] > 0:
                 print(f"overflowing_tokens="+str(batch_encoding.overflowing_tokens.size()[-1]));
-                print(self.decode_token_matrix(batch_encoding.input_ids.tolist()))
                 print(f"Warning: some tokens truncated")
                 print(self.decode_token_matrix(batch_encoding.overflowing_tokens.tolist()))
 

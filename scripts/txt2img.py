@@ -297,7 +297,7 @@ def main():
             assert prompt is not None
             data = [batch_size * [prompt]]
         else:
-            print(f"reading prompts from {opt.from_file}")
+            print(f"\nreading prompts from {opt.prompt_csv}")
             prompt = load_prompt_csv(opt.prompt_csv)
             print(prompt)
             assert prompt is not None
@@ -328,6 +328,7 @@ def main():
     precision_scope = autocast if opt.precision == "autocast" else nullcontext
 
     random.seed()
+    sys.stdout.flush()
 
     with torch.no_grad():
         with precision_scope("cuda"):
