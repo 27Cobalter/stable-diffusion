@@ -22,6 +22,7 @@ from ldm.models.diffusion.plms import PLMSSampler
 # pyexiftoolをインストールする
 # https://pypi.org/project/PyExifTool/
 from exiftool import ExifTool
+from exiftool import ExifToolHelper
 import random
 import csv
 
@@ -49,6 +50,14 @@ def load_prompt_csv(path):
             prompts.append(" ".join(sorted([i for i in vec if i != ""])))
         prompts = " ".join(prompts)
     return prompts
+
+
+def read_metadata(path):
+    with ExifToolHelper() as et:
+        metadata = et.get_metadata(path)
+        seed = metadata[0]["XMP:Title"]
+        prompt = metadata[0]["XMP:Subject"]
+        return seed, prompt
 
 
 def chunk(it, size):
@@ -248,6 +257,12 @@ def main():
         action="append",
         help="reproduce the seeds",
     )
+    # seedをまとめて再現2
+    parser.add_argument(
+        "--rep_dir",
+        type=str,
+        help="reproduce the seeds from dir",
+    )
     # promptをcsvファイルから読み込む
     parser.add_argument(
         "--prompt_csv",
@@ -319,6 +334,10 @@ def main():
     base_begin = base_count
     grid_count = len(os.listdir(outpath)) - 1
 
+    rep_files = []
+    if opt.rep_dir:
+        rep_files = glob.glob(opt.rep_dir + "/*.png", recursive=False)
+
     start_code = None
     if opt.fixed_code:
         start_code = torch.randn(
@@ -338,14 +357,21 @@ def main():
                 n_iter = opt.n_iter
                 if opt.rep_seed:
                     n_iter = len(opt.rep_seed)
+                elif opt.rep_dir:
+                    n_iter = len(rep_files)
                 i = 0
                 for n in trange(n_iter, desc="Sampling"):
-                    if opt.rep_seed or n_iter > 1:
+                    if opt.rep_seed or opt_rep_dir or n_iter > 1:
                         if opt.rep_seed:
                             seed = opt.rep_seed[i]
-                            i += 1
+                        elif opt_rep_dir:
+                            seed, prompt = read_metadata(rep_files[i])
+                            assert prompt is not None
+                            data = [batch_size * [prompt]]
+
                         else:
                             seed = random.randint(0, 0x7FFFFFFF)
+                        i += 1
                         print("\n")
                         seed_everything(seed)
 
