@@ -328,7 +328,6 @@ def main():
     precision_scope = autocast if opt.precision == "autocast" else nullcontext
 
     random.seed()
-    sys.stdout.flush()
 
     with torch.no_grad():
         with precision_scope("cuda"):
