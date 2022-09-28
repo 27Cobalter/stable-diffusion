@@ -527,15 +527,11 @@ def main():
                                     print(
                                         et.execute(
                                             *[
-                                                "-XMP-dc:description="
-                                                + "seed="
-                                                + str(seed)
-                                                + ", param="
-                                                + str(opt)
+                                                "-XMP-dc:description=seed={seed}, param={opt}"
                                             ]
-                                            + ["-XMP-dc:title=" + str(seed)]
-                                            + ["-XMP-dc:creator=" + str(prompt)]
-                                            + ["-XMP-dc:subject=" + str(n_prompt)]
+                                            + ["-XMP-dc:title={seed}"]
+                                            + ["-XMP-dc:creator={prompts}"]
+                                            + ["-XMP-dc:subject={n_prompts}"]
                                             + ["-overwrite_original"]
                                             + [sample_base_count]
                                         )
@@ -561,17 +557,7 @@ def main():
                     with ExifTool() as et:
                         print(
                             et.execute(
-                                *[
-                                    "-XMP-dc:description="
-                                    + base_range
-                                    + ", seed="
-                                    + str(seed)
-                                    + ", param="
-                                    + str(opt)
-                                ]
-                                + ["-XMP-dc:title=" + str(seed)]
-                                + ["-XMP-dc:creator=" + str(prompt)]
-                                + ["-XMP-dc:subject=" + str(n_prompt)]
+                                *["-XMP-dc:description={base_range}, param={opt}"]
                                 + ["-overwrite_original"]
                                 + [grid_name]
                             )
@@ -579,9 +565,9 @@ def main():
                     with open(
                         os.path.join(txt_path, f"grid-{grid_count:04}.txt"), mode="w"
                     ) as f:
-                        f.write(str(opt) + "\n")
-                    print("imave save -> ", str(grid_name))
-                    print("  base_range :", base_range)
+                        f.write("{opt}\n")
+                    print("imave save -> {grid_name}")
+                    print("  base_range : {base_range}")
 
                     grid_count += 1
 
