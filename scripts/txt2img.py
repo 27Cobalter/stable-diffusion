@@ -40,24 +40,27 @@ def patch_conv(klass):
 
 # waifu-diffusionは他モデルとプロンプトの順番が違うらしい
 # https://wiki.installgentoo.com/wiki/Stable_Diffusion#Waifu_Diffusion
-def load_prompt_csv(path):
+def load_prompt_csv(path, deli):
     with open(path, encoding="utf_8") as f:
         reader = csv.reader(f)
         raw_list = [row for row in reader]
         mat = np.array(raw_list[1:]).transpose().tolist()
         prompts = []
         for vec in mat:
-            prompts.append(" ".join(sorted([i for i in vec if i != ""])))
-        prompts = " ".join(prompts)
+            prompts.append(deli.join(sorted([i for i in vec if i != ""])))
+        prompts = deli.join([i for i in prompts if i != ""])
     return prompts
 
 
 def read_metadata(path):
     with ExifToolHelper() as et:
         metadata = et.get_metadata(path)
+        n_prompt = ""
         seed = metadata[0]["XMP:Title"]
-        prompt = metadata[0]["XMP:Subject"]
-        return seed, prompt
+        prompt = metadata[0]["XMP:Creator"]
+        if "XMP:Subject" in metadata[0]:
+            n_prompt = metadata[0]["XMP:Subject"]
+        return seed, prompt, n_prompt
 
 
 def chunk(it, size):
@@ -267,8 +270,19 @@ def main():
     parser.add_argument(
         "--prompt_csv",
         type=str,
-        default="./prompt.csv",
         help="load prompts from this csv. this feature is for waifu-diffusion",
+    )
+    # Negative prompt
+    parser.add_argument(
+        "--negative_prompt",
+        type=str,
+        help="negative prompts",
+    )
+    # Negative prompt csv
+    parser.add_argument(
+        "--negative_prompt_csv",
+        type=str,
+        help="negative prompts",
     )
 
     opt = parser.parse_args()
@@ -313,7 +327,7 @@ def main():
             data = [batch_size * [prompt]]
         else:
             print(f"\nreading prompts from {opt.prompt_csv}")
-            prompt = load_prompt_csv(opt.prompt_csv)
+            prompt = load_prompt_csv(opt.prompt_csv, " ")
             print(prompt)
             assert prompt is not None
             data = [batch_size * [prompt]]
@@ -322,6 +336,19 @@ def main():
         with open(opt.from_file, "r") as f:
             data = f.read().splitlines()
             data = list(chunk(data, batch_size))
+
+    if opt.negative_prompt_csv:
+        print(f"\nreading negative_prompts from {opt.negative_prompt_csv}")
+        n_prompt = load_prompt_csv(opt.negative_prompt_csv, ", ")
+        print(n_prompt)
+        assert n_prompt is not None
+        n_data = [batch_size * [n_prompt]]
+    elif opt.negative_prompt:
+        n_prompt = opt.negative_prompt
+        assert n_prompt is not None
+        n_data = [batch_size * [n_prompt]]
+    else:
+        n_data = [batch_size * [""]]
 
     sample_path = os.path.join(outpath, "samples")
     os.makedirs(sample_path, exist_ok=True)
@@ -361,13 +388,14 @@ def main():
                     n_iter = len(rep_files)
                 i = 0
                 for n in trange(n_iter, desc="Sampling"):
-                    if opt.rep_seed or opt_rep_dir or n_iter > 1:
+                    if opt.rep_seed or opt.rep_dir or n_iter > 1:
                         if opt.rep_seed:
                             seed = opt.rep_seed[i]
-                        elif opt_rep_dir:
-                            seed, prompt = read_metadata(rep_files[i])
+                        elif opt.rep_dir:
+                            seed, prompt, n_prompt = read_metadata(rep_files[i])
                             assert prompt is not None
                             data = [batch_size * [prompt]]
+                            n_data = [batch_size * [n_prompt]]
 
                         else:
                             seed = random.randint(0, 0x7FFFFFFF)
@@ -377,8 +405,19 @@ def main():
 
                     for prompts in tqdm(data, desc="data"):
                         uc = None
+
                         if opt.scale != 1.0:
                             uc = model.get_learned_conditioning(batch_size * [""])
+                        if (
+                            opt.negative_prompt_csv
+                            or opt.negative_prompt
+                            or opt.rep_dir
+                        ):
+                            n_prompts = n_data[0]
+                            if isinstance(n_prompts, tuple):
+                                n_prompts = list(n_prompts)
+                            uc = model.get_learned_conditioning(n_prompts)
+
                         if isinstance(prompts, tuple):
                             prompts = list(prompts)
                         c = model.get_learned_conditioning(prompts)
@@ -446,7 +485,8 @@ def main():
                                                 + str(opt)
                                             ]
                                             + ["-XMP-dc:title=" + str(seed)]
-                                            + ["-XMP-dc:subject=" + str(prompt)]
+                                            + ["-XMP-dc:creator=" + str(prompt)]
+                                            + ["-XMP-dc:subject=" + str(n_prompt)]
                                             + ["-overwrite_original"]
                                             + [sample_base_count]
                                         )
@@ -481,7 +521,8 @@ def main():
                                     + str(opt)
                                 ]
                                 + ["-XMP-dc:title=" + str(seed)]
-                                + ["-XMP-dc:subject=" + str(prompt)]
+                                + ["-XMP-dc:creator=" + str(prompt)]
+                                + ["-XMP-dc:subject=" + str(n_prompt)]
                                 + ["-overwrite_original"]
                                 + [grid_name]
                             )
