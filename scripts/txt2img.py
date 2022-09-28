@@ -12,6 +12,7 @@ import time
 from pytorch_lightning import seed_everything
 from torch import autocast
 from contextlib import contextmanager, nullcontext
+from transformers import CLIPTokenizer, CLIPTextModel
 
 from ldm.util import instantiate_from_config
 from ldm.models.diffusion.ddim import DDIMSampler
@@ -61,6 +62,40 @@ def read_metadata(path):
         if "XMP:Subject" in metadata[0]:
             n_prompt = metadata[0]["XMP:Subject"]
         return seed, prompt, n_prompt
+
+
+# token長さチェック
+def decode_token_matrix(tokenizer, token):
+    if isinstance(token, (list, tuple)):
+        decoded = []
+        for t in token:
+            decoded.append(decode_token_matrix(tokenizer, t))
+        return decoded
+    else:
+        return tokenizer.decoder.get(token)
+
+
+def check_token_length(tokenizer, token):
+    max_length = 77
+    end_of_text = 49407
+
+    batch_encoding = tokenizer(
+        token,
+        truncation=True,
+        max_length=max_length,
+        return_length=True,
+        return_overflowing_tokens=True,
+        padding="max_length",
+        return_tensors="pt",
+    )
+    accept_tokens = batch_encoding.input_ids.tolist()[0]
+    end_pos = accept_tokens.index(end_of_text) + 1
+    print(f"accept_token = {end_pos}")
+    print(decode_token_matrix(tokenizer, accept_tokens[:end_pos]))
+    if hasattr(batch_encoding, "overflowing_tokens"):
+        overflowing_tokens = batch_encoding.overflowing_tokens
+        print(f"overflowing_tokens = {overflowing_tokens.size()[-1]}")
+        print(decode_token_matrix(tokenizer, overflowing_tokens.tolist()[0]))
 
 
 def chunk(it, size):
@@ -113,12 +148,13 @@ def load_replacement(x):
 
 def main():
     parser = argparse.ArgumentParser()
+    default_prompt="a painting of a virus monster playing guitar",
 
     parser.add_argument(
         "--prompt",
         type=str,
         nargs="?",
-        default="a painting of a virus monster playing guitar",
+        default=default_prompt,
         help="the prompt to render",
     )
     parser.add_argument(
@@ -284,6 +320,9 @@ def main():
         type=str,
         help="negative prompts",
     )
+    parser.add_argument(
+        "--check_token_length", action="store_true", help="check token length"
+    )
 
     opt = parser.parse_args()
 
@@ -296,6 +335,45 @@ def main():
         opt.config = "configs/latent-diffusion/txt2img-1p4B-eval.yaml"
         opt.ckpt = "models/ldm/text2img-large/model.ckpt"
         opt.outdir = "outputs/txt2img-samples-laion400m"
+
+    batch_size = opt.n_samples
+    n_rows = opt.n_rows if opt.n_rows > 0 else batch_size
+    if not opt.from_file:
+        if not opt.prompt_csv:
+            prompt = opt.prompt
+            assert prompt is not None
+            data = [batch_size * [prompt]]
+        else:
+            print(f"\nreading prompts from {opt.prompt_csv}")
+            prompt = load_prompt_csv(opt.prompt_csv, " ")
+            assert prompt is not None
+            data = [batch_size * [prompt]]
+    else:
+        print(f"reading prompts from {opt.from_file}")
+        with open(opt.from_file, "r") as f:
+            data = f.read().splitlines()
+            data = list(chunk(data, batch_size))
+
+    if opt.negative_prompt_csv:
+        print(f"reading negative_prompts from {opt.negative_prompt_csv}")
+        n_prompt = load_prompt_csv(opt.negative_prompt_csv, ", ")
+        assert n_prompt is not None
+        n_data = [batch_size * [n_prompt]]
+    elif opt.negative_prompt:
+        n_prompt = opt.negative_prompt
+        assert n_prompt is not None
+        n_data = [batch_size * [n_prompt]]
+    else:
+        n_data = [batch_size * [""]]
+
+    tokenizer = CLIPTokenizer.from_pretrained("openai/clip-vit-large-patch14")
+    print("prompts")
+    check_token_length(tokenizer, data[0])
+    print("negative prompts")
+    check_token_length(tokenizer, n_data[0])
+
+    if opt.check_token_length:
+        return
 
     seed_everything(opt.seed)
     seed = opt.seed
@@ -317,38 +395,6 @@ def main():
 
     os.makedirs(opt.outdir, exist_ok=True)
     outpath = opt.outdir
-
-    batch_size = opt.n_samples
-    n_rows = opt.n_rows if opt.n_rows > 0 else batch_size
-    if not opt.from_file:
-        if not opt.prompt_csv:
-            prompt = opt.prompt
-            assert prompt is not None
-            data = [batch_size * [prompt]]
-        else:
-            print(f"\nreading prompts from {opt.prompt_csv}")
-            prompt = load_prompt_csv(opt.prompt_csv, " ")
-            print(prompt)
-            assert prompt is not None
-            data = [batch_size * [prompt]]
-    else:
-        print(f"reading prompts from {opt.from_file}")
-        with open(opt.from_file, "r") as f:
-            data = f.read().splitlines()
-            data = list(chunk(data, batch_size))
-
-    if opt.negative_prompt_csv:
-        print(f"\nreading negative_prompts from {opt.negative_prompt_csv}")
-        n_prompt = load_prompt_csv(opt.negative_prompt_csv, ", ")
-        print(n_prompt)
-        assert n_prompt is not None
-        n_data = [batch_size * [n_prompt]]
-    elif opt.negative_prompt:
-        n_prompt = opt.negative_prompt
-        assert n_prompt is not None
-        n_data = [batch_size * [n_prompt]]
-    else:
-        n_data = [batch_size * [""]]
 
     sample_path = os.path.join(outpath, "samples")
     os.makedirs(sample_path, exist_ok=True)
