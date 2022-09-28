@@ -53,6 +53,7 @@ def load_prompt_csv(path, deli):
     return prompts
 
 
+# seed値再現でプロンプト取得
 def read_metadata(path):
     with ExifToolHelper() as et:
         metadata = et.get_metadata(path)
@@ -148,7 +149,7 @@ def load_replacement(x):
 
 def main():
     parser = argparse.ArgumentParser()
-    default_prompt="a painting of a virus monster playing guitar",
+    default_prompt = "a painting of a virus monster playing guitar"
 
     parser.add_argument(
         "--prompt",
@@ -439,9 +440,11 @@ def main():
                             seed = opt.rep_seed[i]
                         elif opt.rep_dir:
                             seed, prompt, n_prompt = read_metadata(rep_files[i])
-                            assert prompt is not None
-                            data = [batch_size * [prompt]]
-                            n_data = [batch_size * [n_prompt]]
+                            if not (opt.prompt != default_prompt or opt.prompt_csv):
+                                assert prompt is not None
+                                data = [batch_size * [prompt]]
+                            if not (opt.negative_prompt or opt.negative_prompt_csv):
+                                n_data = [batch_size * [n_prompt]]
 
                         else:
                             seed = random.randint(0, 0x7FFFFFFF)
