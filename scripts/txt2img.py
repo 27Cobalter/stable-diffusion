@@ -410,7 +410,7 @@ def main():
 
     rep_files = []
     if opt.rep_dir:
-        rep_files = glob.glob(opt.rep_dir + "/*.png", recursive=False)
+        rep_files = glob.glob(f"{opt.rep_dir}/*.png", recursive=False)
 
     start_code = None
     if opt.fixed_code:
@@ -527,16 +527,16 @@ def main():
                                     print(
                                         et.execute(
                                             *[
-                                                "-XMP-dc:description=seed={seed}, param={opt}"
+                                                f"-XMP-dc:description=seed={seed}, param={opt}"
                                             ]
-                                            + ["-XMP-dc:title={seed}"]
-                                            + ["-XMP-dc:creator={prompts}"]
-                                            + ["-XMP-dc:subject={n_prompts}"]
+                                            + [f"-XMP-dc:title={seed}"]
+                                            + [f"-XMP-dc:creator={str(prompts[0])}"]
+                                            + [f"-XMP-dc:subject={str(n_prompts[0])}"]
                                             + ["-overwrite_original"]
                                             + [sample_base_count]
                                         )
                                     )
-                                print("imave save -> ", str(sample_base_count))
+                                print(f"imave save -> {sample_base_count}")
 
                         if not opt.skip_grid:
                             all_samples.append(x_checked_image_torch)
@@ -557,7 +557,7 @@ def main():
                     with ExifTool() as et:
                         print(
                             et.execute(
-                                *["-XMP-dc:description={base_range}, param={opt}"]
+                                *[f"-XMP-dc:description={base_range}, param={opt}"]
                                 + ["-overwrite_original"]
                                 + [grid_name]
                             )
@@ -565,9 +565,9 @@ def main():
                     with open(
                         os.path.join(txt_path, f"grid-{grid_count:04}.txt"), mode="w"
                     ) as f:
-                        f.write("{opt}\n")
-                    print("imave save -> {grid_name}")
-                    print("  base_range : {base_range}")
+                        f.write(f"{opt}\n")
+                    print(f"imave save -> {grid_name}")
+                    print(f"  base_range : {base_range}")
 
                     grid_count += 1
 
