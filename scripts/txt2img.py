@@ -25,78 +25,8 @@ from ldm.models.diffusion.plms import PLMSSampler
 from exiftool import ExifTool
 from exiftool import ExifToolHelper
 import random
-import csv
 
-# SPDX-License-Identifier: MIT
-# SPDX-FileCopyrightText: © 2022 lox9973
-# https://gitlab.com/-/snippets/2395088
-def patch_conv(klass):
-    init = klass.__init__
-
-    def __init__(self, *args, **kwargs):
-        return init(self, *args, **kwargs, padding_mode="circular")
-
-    klass.__init__ = __init__
-
-
-# waifu-diffusionは他モデルとプロンプトの順番が違うらしい
-# https://wiki.installgentoo.com/wiki/Stable_Diffusion#Waifu_Diffusion
-def load_prompt_csv(path, deli):
-    with open(path, encoding="utf_8") as f:
-        reader = csv.reader(f)
-        raw_list = [row for row in reader]
-        mat = np.array(raw_list[1:]).transpose().tolist()
-        prompts = []
-        for vec in mat:
-            prompts.append(deli.join(sorted([i for i in vec if i != ""])))
-        prompts = deli.join([i for i in prompts if i != ""])
-    return prompts
-
-
-# seed値再現でプロンプト取得
-def read_metadata(path):
-    with ExifToolHelper() as et:
-        metadata = et.get_metadata(path)
-        n_prompt = ""
-        seed = metadata[0]["XMP:Title"]
-        prompt = metadata[0]["XMP:Creator"]
-        if "XMP:Subject" in metadata[0]:
-            n_prompt = metadata[0]["XMP:Subject"]
-        return seed, prompt, n_prompt
-
-
-# token長さチェック
-def decode_token_matrix(tokenizer, token):
-    if isinstance(token, (list, tuple)):
-        decoded = []
-        for t in token:
-            decoded.append(decode_token_matrix(tokenizer, t))
-        return decoded
-    else:
-        return tokenizer.decoder.get(token)
-
-
-def check_token_length(tokenizer, token):
-    max_length = 77
-    end_of_text = 49407
-
-    batch_encoding = tokenizer(
-        token,
-        truncation=True,
-        max_length=max_length,
-        return_length=True,
-        return_overflowing_tokens=True,
-        padding="max_length",
-        return_tensors="pt",
-    )
-    accept_tokens = batch_encoding.input_ids.tolist()[0]
-    end_pos = accept_tokens.index(end_of_text) + 1
-    print(f"accept_token = {end_pos}")
-    print(decode_token_matrix(tokenizer, accept_tokens[:end_pos]))
-    if hasattr(batch_encoding, "overflowing_tokens"):
-        overflowing_tokens = batch_encoding.overflowing_tokens
-        print(f"overflowing_tokens = {overflowing_tokens.size()[-1]}")
-        print(decode_token_matrix(tokenizer, overflowing_tokens.tolist()[0]))
+import customfunc
 
 
 def chunk(it, size):
@@ -329,7 +259,7 @@ def main():
 
     if opt.tile:
         for klass in [torch.nn.Conv2d, torch.nn.ConvTranspose2d]:
-            patch_conv(klass)
+            customfunc.patch_conv(klass)
 
     if opt.laion400m:
         print("Falling back to LAION 400M model...")
@@ -346,7 +276,7 @@ def main():
             data = [batch_size * [prompt]]
         else:
             print(f"\nreading prompts from {opt.prompt_csv}")
-            prompt = load_prompt_csv(opt.prompt_csv, " ")
+            prompt = customfunc.load_prompt_csv(opt.prompt_csv, " ")
             assert prompt is not None
             data = [batch_size * [prompt]]
     else:
@@ -357,7 +287,7 @@ def main():
 
     if opt.negative_prompt_csv:
         print(f"reading negative_prompts from {opt.negative_prompt_csv}")
-        n_prompt = load_prompt_csv(opt.negative_prompt_csv, ", ")
+        n_prompt = customfunc.load_prompt_csv(opt.negative_prompt_csv, ", ")
         assert n_prompt is not None
         n_data = [batch_size * [n_prompt]]
     elif opt.negative_prompt:
@@ -369,9 +299,9 @@ def main():
 
     tokenizer = CLIPTokenizer.from_pretrained("openai/clip-vit-large-patch14")
     print("prompts")
-    check_token_length(tokenizer, data[0])
+    customfunc.check_token_length(tokenizer, data[0])
     print("negative prompts")
-    check_token_length(tokenizer, n_data[0])
+    customfunc.check_token_length(tokenizer, n_data[0])
 
     if opt.check_token_length:
         return
@@ -439,7 +369,9 @@ def main():
                         if opt.rep_seed:
                             seed = opt.rep_seed[i]
                         elif opt.rep_dir:
-                            seed, prompt, n_prompt = read_metadata(rep_files[i])
+                            seed, prompt, n_prompt = customfunc.read_metadata(
+                                rep_files[i]
+                            )
                             if not (opt.prompt != default_prompt or opt.prompt_csv):
                                 assert prompt is not None
                                 data = [batch_size * [prompt]]
