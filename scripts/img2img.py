@@ -12,12 +12,19 @@ from einops import rearrange, repeat
 from torchvision.utils import make_grid
 from torch import autocast
 from contextlib import nullcontext
+from transformers import CLIPTokenizer, CLIPTextModel
 import time
 from pytorch_lightning import seed_everything
 
 from ldm.util import instantiate_from_config
 from ldm.models.diffusion.ddim import DDIMSampler
 from ldm.models.diffusion.plms import PLMSSampler
+
+from exiftool import ExifTool
+from exiftool import ExifToolHelper
+import random
+
+import customfunc
 
 
 def chunk(it, size):
@@ -59,12 +66,13 @@ def load_img(path):
 
 def main():
     parser = argparse.ArgumentParser()
+    default_prompt = ("a painting of a virus monster playing guitar",)
 
     parser.add_argument(
         "--prompt",
         type=str,
         nargs="?",
-        default="a painting of a virus monster playing guitar",
+        default=default_prompt,
         help="the prompt to render",
     )
 
@@ -189,9 +197,89 @@ def main():
         choices=["full", "autocast"],
         default="autocast",
     )
+    # メモリ節約
+    parser.add_argument("--fp16", action="store_true", help="convert model to fp16")
+    # タイリングテクスチャ
+    parser.add_argument("--tile", action="store_true", help="create tiling texture")
+    # seedをまとめて再現
+    parser.add_argument(
+        "--rep_seed",
+        action="append",
+        help="reproduce the seeds",
+    )
+    parser.add_argument(
+        "--rep_dir",
+        type=str,
+        help="reproduce the seeds from dir",
+    )
+    # promptをcsvから読み込む
+    parser.add_argument(
+        "--prompt_csv",
+        type=str,
+        help="load prompts from this csv. and sort for waifu-diffusion",
+    )
+    # Negative prompt
+    parser.add_argument(
+        "--negative_prompt",
+        type=str,
+        help="negative prompts",
+    )
+    parser.add_argument(
+        "--negative_prompt_csv",
+        type=str,
+        help="negative promtps from csv",
+    )
+    parser.add_argument(
+        "--check_token_length", action="store_true", help="check token length"
+    )
 
     opt = parser.parse_args()
+
+    if opt.tile:
+        for klass in [torch.nn.Conv2d, torch.nn.ConvTranspose2d]:
+            customfunc.patch_conv(klass)
+
+    batch_size = opt.n_samples
+    n_rows = opt.n_rows if opt.n_rows > 0 else batch_size
+    if not opt.from_file:
+        if not opt.prompt_csv:
+            prompt = opt.prompt
+            assert prompt is not None
+            data = [batch_size * [prompt]]
+        else:
+            print(f"\nreading prompts from {opt.prompt_csv}")
+            prompt = customfunc.load_prompt_csv(opt.prompt_csv, " ")
+            assert prompt is not None
+            data = [batch_size * [prompt]]
+    else:
+        print(f"reading prompts from {opt.from_file}")
+        with open(opt.from_file, "r") as f:
+            data = f.read().splitlines()
+            data = list(chunk(data, batch_size))
+
+    if opt.negative_prompt_csv:
+        print(f"reading negative_prompts from {opt.negative_prompt_csv}")
+        n_prompt = customfunc.load_prompt_csv(opt.negative_prompt_csv, ",  ")
+        assert n_prompt is not None
+        n_data = [batch_size * [n_prompt]]
+    elif opt.negative_prompt:
+        n_prompt = opt.negative_prompt
+        assert n_prompt is not None
+        n_data = [batch_size * [n_prompt]]
+    else:
+        n_data = [batch_size * [""]]
+
+    tokenizer = CLIPTokenizer.from_pretrained("openai/clip-vit-large-patch14")
+    print("prompts")
+    customfunc.check_token_length(tokenizer, data[0])
+    print("negative prompts")
+    customfunc.check_token_length(tokenizer, n_data[0])
+
+    if opt.check_token_length:
+        return
+
     seed_everything(opt.seed)
+    seed = opt.seed
 
     config = OmegaConf.load(f"{opt.config}")
     model = load_model_from_config(config, f"{opt.ckpt}")
@@ -208,30 +296,24 @@ def main():
     os.makedirs(opt.outdir, exist_ok=True)
     outpath = opt.outdir
 
-    batch_size = opt.n_samples
-    n_rows = opt.n_rows if opt.n_rows > 0 else batch_size
-    if not opt.from_file:
-        prompt = opt.prompt
-        assert prompt is not None
-        data = [batch_size * [prompt]]
-
-    else:
-        print(f"reading prompts from {opt.from_file}")
-        with open(opt.from_file, "r") as f:
-            data = f.read().splitlines()
-            data = list(chunk(data, batch_size))
-
     sample_path = os.path.join(outpath, "samples")
     os.makedirs(sample_path, exist_ok=True)
     base_count = len(os.listdir(sample_path))
+    base_begin = base_count
     grid_count = len(os.listdir(outpath)) - 1
 
-    assert os.path.isfile(opt.init_img)
-    init_image = load_img(opt.init_img).to(device)
-    init_image = repeat(init_image, "1 ... -> b ...", b=batch_size)
-    init_latent = model.get_first_stage_encoding(
-        model.encode_first_stage(init_image)
-    )  # move to latent space
+    rep_files = []
+    if opt.rep_dir:
+        rep_files = glob.glob(f"{opt.rep_dir}/*.png", recursive=False)
+
+    if not(opt.rep_seed or opt.rep_dir):
+        init_img = opt.init_img
+        assert os.path.isfile(init_img)
+        init_image = load_img(init_img).to(device)
+        init_image = repeat(init_image, "1 ... -> b ...", b=batch_size)
+        init_latent = model.get_first_stage_encoding(
+            model.encode_first_stage(init_image)
+        )  # move to latent space
 
     sampler.make_schedule(
         ddim_num_steps=opt.ddim_steps, ddim_eta=opt.ddim_eta, verbose=False
@@ -242,23 +324,68 @@ def main():
     print(f"target t_enc is {t_enc} steps")
 
     precision_scope = autocast if opt.precision == "autocast" else nullcontext
+    random.seed()
     with torch.no_grad():
         with precision_scope("cuda"):
             with model.ema_scope():
                 tic = time.time()
                 all_samples = list()
-                for n in trange(opt.n_iter, desc="Sampling"):
+
+                n_iter = opt.n_iter
+                if opt.rep_seed:
+                    n_iter = len(opt.rep_seed)
+                elif opt.rep_dir:
+                    n_iter = len(rep_files)
+                i = 0
+                for n in trange(n_iter, desc="Sampling"):
+                    if opt.rep_seed or opt.rep_dir or n_iter > 1:
+                        if opt.rep_seed:
+                            seed = opt.rep_seed[i]
+                        elif opt.rep_dir:
+                            seed, prompt, n_prompt, src_path = customfunc.read_metadata(
+                                rep_files[i]
+                            )
+                            if not (opt.negative_prompt or opt.negative_prompt_csv):
+                                n_data = [batch_size * [n_prompt]]
+                            if src_path == "":
+                                print(f"\n{rep_files[i]} was generated by txt2img")
+                                continue
+                            init_img = src_path
+                            init_image = load_img(init_img).to(device)
+                            init_image = repeat(
+                                init_image, "1 ... -> b ...", b=batch_size
+                            )
+                            init_latent = model.get_first_stage_encoding(
+                                model.encode_first_stage(init_image)
+                            )  # move to latent space
+                            init_img = src_path
+                        else:
+                            seed = random.randint(0, 0x7FFFFFFF)
+                        i += 1
+                        print("\n")
+                        seed_everything(seed)
+
                     for prompts in tqdm(data, desc="data"):
                         uc = None
                         if opt.scale != 1.0:
                             uc = model.get_learned_conditioning(batch_size * [""])
+                        if (
+                            opt.negative_prompt_csv
+                            or opt.neagtive_prompt
+                            or opt.rep_dir
+                        ):
+                            n_prompts = n_data[0]
+                            if isinstance(n_prompts, tuple):
+                                n_prompts = list(n_prompts)
+                            uc = model.get_learned_conditioning(n_prompts)
                         if isinstance(prompts, tuple):
                             prompts = list(prompts)
                         c = model.get_learned_conditioning(prompts)
 
                         # encode (scaled latent)
                         z_enc = sampler.stochastic_encode(
-                            init_latent, torch.tensor([t_enc] * batch_size).to(device)
+                            init_latent,
+                            torch.tensor([t_enc] * batch_size).to(device),
                         )
                         # decode it
                         samples = sampler.decode(
@@ -279,10 +406,28 @@ def main():
                                 x_sample = 255.0 * rearrange(
                                     x_sample.cpu().numpy(), "c h w -> h w c"
                                 )
+                                sample_base_count = os.path.join(
+                                    sample_path, f"{base_count:05}.png"
+                                )
                                 Image.fromarray(x_sample.astype(np.uint8)).save(
-                                    os.path.join(sample_path, f"{base_count:05}.png")
+                                    sample_base_count
                                 )
                                 base_count += 1
+                                with ExifTool() as et:
+                                    print(
+                                        et.execute(
+                                            *[
+                                                f"-XMP-dc:description=seed={seed}, param={opt}"
+                                            ]
+                                            + [f"-XMP-dc:title={seed}"]
+                                            + [f"-XMP-dc:creator={str(prompts[0])}"]
+                                            + [f"-XMP-dc:subject={str(n_prompts[0])}"]
+                                            + [f"-xmp:WebStatement={init_img}"]
+                                            + ["-overwrite_original"]
+                                            + [sample_base_count]
+                                        )
+                                    )
+                                    print(f"image save -> {sample_base_count}")
                         all_samples.append(x_samples)
 
                 if not opt.skip_grid:
@@ -293,9 +438,20 @@ def main():
 
                     # to image
                     grid = 255.0 * rearrange(grid, "c h w -> h w c").cpu().numpy()
-                    Image.fromarray(grid.astype(np.uint8)).save(
-                        os.path.join(outpath, f"grid-{grid_count:04}.png")
-                    )
+                    grid_name = os.path.join(outpath, f"grid-{grid_count:04}.png")
+                    Image.fromarray(grid.astype(np.uint8)).save(grid_name)
+                    base_range = f"{base_begin:04}.png:{base_count-1:04}.png"
+                    with ExifTool() as et:
+                        print(
+                            et.execute(
+                                *[f"-XMP-dc:description={base_range}, param={opt}"]
+                                + ["-overwrite_original"]
+                                + [grid_name]
+                            )
+                        )
+                    print(f"image save -> {grid_name}")
+                    print(f"  base_range : {base_range}")
+
                     grid_count += 1
 
                 toc = time.time()
