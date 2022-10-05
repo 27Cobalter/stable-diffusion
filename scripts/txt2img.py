@@ -330,10 +330,6 @@ def main():
     sample_path = os.path.join(outpath, "samples")
     os.makedirs(sample_path, exist_ok=True)
 
-    # 引数保存
-    txt_path = os.path.join(outpath, "txt")
-    os.makedirs(txt_path, exist_ok=True)
-
     base_count = len(os.listdir(sample_path))
     base_begin = base_count
     grid_count = len(os.listdir(outpath)) - 1
@@ -494,10 +490,6 @@ def main():
                                 + [grid_name]
                             )
                         )
-                    with open(
-                        os.path.join(txt_path, f"grid-{grid_count:04}.txt"), mode="w"
-                    ) as f:
-                        f.write(f"{opt}\n")
                     print(f"imave save -> {grid_name}")
                     print(f"  base_range : {base_range}")
 
